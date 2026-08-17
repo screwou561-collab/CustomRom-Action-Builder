@@ -1,0 +1,157 @@
+ name: Android ROM Builder (macan)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rom_name:
+        description: 'ROM Name'
+        required: true
+        default: 'DerpFest'
+      manifest_url:
+        description: 'Manifest Git URL'
+        required: true
+        default: 'https://github.com/DerpFest-AOSP/android_manifest.git'
+      manifest_branch:
+        description: 'Manifest Branch'
+        required: true
+        default: '16.2'
+      device_codename:
+        description: 'Device Codename'
+        required: true
+        default: 'macan'
+      device_name:
+        description: 'Device Name'
+        required: true
+        default: 'OnePlus 15R'
+      lunch_combo:
+        description: 'Lunch Combo'
+        required: true
+        default: 'lineage_macan-bp4a-user'
+      device_tree:
+        description: 'Device Tree Git URL'
+        required: true
+        default: 'https://github.com/screwou561-collab/OnePlus-15R-Device-Tree.git'
+      device_tree_path:
+        description: 'Where the device tree gets cloned to (must match BoardConfig paths)'
+        required: true
+        default: 'device/oneplus/macan'
+      vendor_tree:
+        description: 'Vendor Tree Git URL (REQUIRED - you do not have this yet)'
+        required: true
+        default: 'REPLACE_ME'
+      vendor_tree_path:
+        description: 'Where the vendor tree gets cloned to'
+        required: true
+        default: 'vendor/oneplus/macan'
+      kernel_tree:
+        description: 'Kernel Tree Git URL (REQUIRED - you do not have this yet)'
+        required: true
+        default: 'REPLACE_ME'
+      kernel_tree_path:
+        description: 'Where the kernel tree gets cloned to'
+        required: true
+        default: 'kernel/oneplus/macan'
+
+jobs:
+  build:
+    name: Build ROM
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # --- REAL FIX: free up disk space before doing anything else ---
+    # GitHub's free runners only give ~14GB free. AOSP/Lineage-based builds
+    # need 150-250GB+. Without this step, repo sync or the build itself
+    # will die with "No space left on device."
+    - name: Free up disk space
+      run: |
+        echo "Before cleanup:"
+        df -h /
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/local/share/boost
+        sudo docker image prune --all --force 2>/dev/null || true
+        sudo apt-get clean
+        echo "After cleanup:"
+        df -h /
+
+    # --- REAL FIX: Java 17, not 11. Android 14+ builds require it. ---
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y openjdk-17-jdk bc bison build-essential curl flex git gnupg gperf \
+        libncurses5-dev libssl-dev libxml2 libxml2-utils lzop pngcrush repo rsync \
+        schedtool squashfs-tools xsltproc zip unzip zlib1g-dev ccache
+
+    - name: Setup Git & Repo
+      run: |
+        git config --global user.name "${{ secrets.GIT_USERNAME }}"
+        git config --global user.email "${{ secrets.GIT_EMAIL }}"
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod +x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Notify Telegram - Build Started
+      run: |
+        START_TIME=$(date +%s)
+        echo "START_TIME=$START_TIME" >> $GITHUB_ENV
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
+        -d chat_id="${{ secrets.TG_CHAT_ID }}" \
+        -d text="Starting Build: ${{ github.event.inputs.rom_name }} for ${{ github.event.inputs.device_codename }}" \
+        -d parse_mode="Markdown"
+
+    - name: Initialize Repo
+      run: |
+        mkdir rom && cd rom
+        repo init -u ${{ github.event.inputs.manifest_url }} -b ${{ github.event.inputs.manifest_branch }} --depth=1 --git-lfs
+        repo sync -c --no-tags --no-clone-bundle -j$(nproc)
+
+    # --- REAL FIX: clone to the manufacturer-subfolder path, not device/<codename> ---
+    - name: Clone Device Trees
+      run: |
+        cd rom
+        git clone ${{ github.event.inputs.device_tree }} ${{ github.event.inputs.device_tree_path }}
+        git clone ${{ github.event.inputs.vendor_tree }} ${{ github.event.inputs.vendor_tree_path }}
+        git clone ${{ github.event.inputs.kernel_tree }} ${{ github.event.inputs.kernel_tree_path }}
+
+    - name: Build ROM
+      run: |
+        cd rom
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export CCACHE_EXEC=$(which ccache)
+        export USE_CCACHE=1
+        ccache -M 10G
+        source build/envsetup.sh
+        lunch ${{ github.event.inputs.lunch_combo }}
+        mka derp -j$(nproc)
+
+    - name: Upload to Telegram - Success
+      if: success()
+      run: |
+        END_TIME=$(date +%s)
+        DURATION=$(( (END_TIME - START_TIME) / 60 ))
+        cd rom/out/target/product/${{ github.event.inputs.device_codename }}
+        FILE=$(ls *.zip | head -n 1)
+        SIZE=$(du -h "$FILE" | cut -f1)
+        MD5=$(md5sum "$FILE" | cut -d ' ' -f1)
+
+        curl -F document=@"$FILE" \
+             -F chat_id="${{ secrets.TG_CHAT_ID }}" \
+             -F caption="Build Complete: ${{ github.event.inputs.rom_name }} for ${{ github.event.inputs.device_codename }} - Size: $SIZE - MD5: $MD5 - Duration: ${DURATION}min" \
+             -F parse_mode="Markdown" \
+             https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendDocument
+
+    - name: Notify Telegram - Build Failed
+      if: failure()
+      run: |
+        END_TIME=$(date +%s)
+        DURATION=$(( (END_TIME - START_TIME) / 60 ))
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
+        -d chat_id="${{ secrets.TG_CHAT_ID }}" \
+        -d text="Build Failed: ${{ github.event.inputs.rom_name }} for ${{ github.event.inputs.device_codename }} - Duration: ${DURATION}min - Check Actions logs." \
+        -d parse_mode="Markdown"
