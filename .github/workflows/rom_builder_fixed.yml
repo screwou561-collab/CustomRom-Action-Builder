@@ -1,4 +1,4 @@
- name: Android ROM Builder (macan)
+name: Android ROM Builder (macan)
 
 on:
   workflow_dispatch:
@@ -34,23 +34,23 @@ on:
       device_tree_path:
         description: 'Where the device tree gets cloned to (must match BoardConfig paths)'
         required: true
-        default: 'device/oneplus/macan'
+        default: 'device/oplus/ossi'
       vendor_tree:
-        description: 'Vendor Tree Git URL (REQUIRED - you do not have this yet)'
+        description: 'Vendor Tree Git URL'
         required: true
-        default: 'REPLACE_ME'
+        default: 'https://github.com/screwou561-collab/OnePlus15R-Vendor-Tree.git'
       vendor_tree_path:
         description: 'Where the vendor tree gets cloned to'
         required: true
-        default: 'vendor/oneplus/macan'
+        default: 'vendor/oplus/ossi'
       kernel_tree:
-        description: 'Kernel Tree Git URL (REQUIRED - you do not have this yet)'
+        description: 'Kernel Tree Git URL'
         required: true
-        default: 'REPLACE_ME'
+        default: 'https://github.com/screwou561-collab/OnePlus-15R-Kernel-Source.git'
       kernel_tree_path:
         description: 'Where the kernel tree gets cloned to'
         required: true
-        default: 'kernel/oneplus/macan'
+        default: 'kernel/oneplus/sm8845'
 
 jobs:
   build:
